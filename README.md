@@ -2,6 +2,8 @@
 
 [Introduction](#introduction) | [Features](#features) | [Requirements](#requirements) | [Installation](#installation) | [Usage](#usage) | [Simulate Mode](#simulate-mode) | [Configuration](#configuration) | [Contributing](#contributing) | [License](#license)
 
+![Anki Streak Fixer Logo](./img/logo.png)
+
 ## Introduction
 Anki Streak Fixer is a Rust-based utility to manage and modify streak data in your Anki decks. It allows users to process notes in a specified deck and collection, simulate changes, and ensure consistent data integrity.
 
