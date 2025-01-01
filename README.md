@@ -5,7 +5,7 @@
 ![Anki Streak Fixer Logo](./img/logo.png)
 
 ## Introduction
-Anki Streak Fixer is a Rust-based utility to manage and modify streak data in your Anki decks. It allows users to process notes in a specified deck and collection, simulate changes, and ensure consistent data integrity.
+Anki Streak Fixer is a Rust-based utility to manage and modify streak data in your Anki decks. Essentially, it moves reviews in a particular deck in a specified collection from _today_ to _yesterday_. This fixes the condition that leads to a missed streak. Yes, this is "cheating", but it causes me no moral dilemma. But if you have strong opinions about such measures, the project may not be for you.
 
 This application is particularly useful for advanced Anki users who need to manipulate review logs programmatically.
 
@@ -23,6 +23,11 @@ This application is particularly useful for advanced Anki users who need to mani
 - An existing Anki installation
 
 ## Installation
+
+You can install from the source. building the application locally on your machine or you can download the binary for your architecture and install it that way. If you choose the latter, you are on your own in terms of dealing with any complaints that your OS has about unsigned binaries from unknown developers. I'm not interested in jumping through whatever hoops are necessary to get around these warnings.
+
+### Install from source (recommended for reasonable technically-adept users)
+
 To install Anki Streak Fixer, follow these steps:
 
 1. Clone the repository:
@@ -38,6 +43,9 @@ To install Anki Streak Fixer, follow these steps:
 
 3. The compiled binary can be found in the `target/release` directory.
 
+### Install from a prebuilt binary
+
+Go to the **Releases** section of this repository and download the appropriate binary for your architecture.
 ## Usage
 Run the application with the required arguments:
 
