@@ -39,15 +39,17 @@ struct AnkiProcessor {
     deck_name: String,
     simulate: bool,
     db_path: PathBuf,
+    limit: i64,
 }
 
 impl AnkiProcessor {
-    fn new(deck_name: &str, collection_name: &str, simulate: bool) -> Self {
+    fn new(deck_name: &str, collection_name: &str, simulate: bool, limit: i64) -> Self {
         let collection = AnkiCollection::new(collection_name);
         Self {
             deck_name: deck_name.to_string(),
             simulate,
             db_path: collection.collection_path(),
+            limit
         }
     }
 
@@ -139,15 +141,15 @@ impl AnkiProcessor {
 
     fn fetch_reviewed_notes(&self) -> Result<Vec<i64>> {
         let query = "
-            SELECT DISTINCT notes.id
-            FROM cards
-            JOIN notes ON cards.nid = notes.id
-            JOIN decks ON cards.did = decks.id
-            JOIN revlog ON cards.id = revlog.cid
-            WHERE decks.name COLLATE NOCASE = ?1
-            AND date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-            ORDER BY notes.id;
-        ";
+        SELECT DISTINCT notes.id
+        FROM cards
+        JOIN notes ON cards.nid = notes.id
+        JOIN decks ON cards.did = decks.id
+        JOIN revlog ON cards.id = revlog.cid
+        WHERE decks.name COLLATE NOCASE = ?1
+        AND date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
+        ORDER BY notes.id;
+    ";
 
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(query)?;
@@ -156,8 +158,16 @@ impl AnkiProcessor {
             .query_map(params![self.deck_name], |row| row.get(0))?
             .collect::<Result<Vec<i64>, _>>()?;
 
-        Ok(notes)
+        // Apply limit if specified
+        let limited_notes = if self.limit > 0 {
+            notes.into_iter().take(self.limit as usize).collect()
+        } else {
+            notes
+        };
+
+        Ok(limited_notes)
     }
+
 
     fn process_notes(&self, notes: Vec<i64>, rid_string: &str) -> Result<()> {
         let start_time: i64 = rid_string.split(':').nth(1).unwrap().parse().unwrap();
@@ -215,6 +225,13 @@ fn get_clap_matches() -> ArgMatches {
                 .long("simulate")
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("limit")
+                .help("Limit the number of cards moved to previous day.")
+                .short('l')
+                .long("limit")
+                .value_name("LIMIT"),
+        )
         .get_matches()
 }
 
@@ -223,9 +240,13 @@ fn main() -> Result<()> {
 
     let deck_name = matches.get_one::<String>("deck_name").unwrap().as_str();
     let collection_name = matches.get_one::<String>("collection").unwrap().as_str();
+
     let simulate = matches.get_flag("simulate");
 
-    let processor = AnkiProcessor::new(deck_name, collection_name, simulate);
+    // Allow user to optionally limit the number of cards moved to previous day
+    let limit: i64 = matches.get_one::<String>("limit").unwrap_or(&"0".to_string()).parse().unwrap_or(0);
+
+    let processor = AnkiProcessor::new(deck_name, collection_name, simulate, limit);
     processor.process()
 }
 
@@ -236,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_generate_rid_string() {
-        let processor = AnkiProcessor::new("test_deck", "test_collection", true);
+        let processor = AnkiProcessor::new("test_deck", "test_collection", true, 1);
         let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let rid_string = processor.generate_rid_string(date, 1);
 

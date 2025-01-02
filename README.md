@@ -59,6 +59,7 @@ cargo run -- "<DECK_NAME>" -c "<COLLECTION_NAME>" [-s]
 ### Options
 - `-c`, `--collection <COLLECTION>`: The name of the Anki collection.
 - `-s`, `--simulate`: Enable simulation mode to preview changes without modifying the database.
+- `l`, `--limit`: Limit the number of cards moved
 
 ### Example
 Simulate changes for the deck "Словарный запас" in the collection "Alan - Russian":
