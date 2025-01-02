@@ -1,8 +1,12 @@
+mod utils;
+mod date;
+
 use rusqlite::{params, Connection, Result};
 use chrono::{Local, NaiveDate, NaiveTime, TimeZone};
 use clap::{Arg, ArgMatches, Command};
 use std::env;
 use std::path::PathBuf;
+use date::parse_date;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -40,16 +44,21 @@ struct AnkiProcessor {
     simulate: bool,
     db_path: PathBuf,
     limit: i64,
+    from_date: Option<NaiveDate>,
+    to_date: Option<NaiveDate>,
 }
 
 impl AnkiProcessor {
-    fn new(deck_name: &str, collection_name: &str, simulate: bool, limit: i64) -> Self {
+    fn new(deck_name: &str, collection_name: &str, simulate: bool, limit: i64,
+           from_date: Option<NaiveDate>, to_date: Option<NaiveDate>) -> Self {
         let collection = AnkiCollection::new(collection_name);
         Self {
             deck_name: deck_name.to_string(),
             simulate,
             db_path: collection.collection_path(),
-            limit
+            limit,
+            from_date,
+            to_date,
         }
     }
 
@@ -66,7 +75,11 @@ impl AnkiProcessor {
 
         let rollover_hours = self.get_rollover_hours()?;
         let today = Local::now().date_naive();
-        let rid_string = self.generate_rid_string(today, rollover_hours);
+
+        // Use from_date if provided, otherwise use today
+        let base_date = self.from_date.unwrap_or_else(|| today);
+        let rid_string = self.generate_rid_string(base_date, rollover_hours);
+
         let note_ids = self.fetch_reviewed_notes()?;
 
         if note_ids.is_empty() {
@@ -110,11 +123,6 @@ impl AnkiProcessor {
         }
     }
 
-
-
-
-
-
     fn generate_rid_string(&self, date: NaiveDate, rollover_hours: i64) -> String {
         let rollover_time = NaiveTime::from_hms_opt(rollover_hours as u32, 0, 0)
             .expect("Invalid rollover hour");
@@ -134,10 +142,6 @@ impl AnkiProcessor {
 
         format!("rid:{}:{}", start_time, end_time)
     }
-
-
-
-
 
     fn fetch_reviewed_notes(&self) -> Result<Vec<i64>> {
         let query = "
@@ -173,26 +177,38 @@ impl AnkiProcessor {
         let start_time: i64 = rid_string.split(':').nth(1).unwrap().parse().unwrap();
         let end_time: i64 = rid_string.split(':').nth(2).unwrap().parse().unwrap();
 
+        // Calculate the offset if dates are provided
+        let id_offset = if let (Some(from), Some(to)) = (self.from_date, self.to_date) {
+            date::calculate_id_offset(date::days_between(from, to))
+        } else {
+            86_400_000 // default one day offset
+        };
+
         let update_query = "
-            UPDATE revlog
-            SET id = id - 86400000
-            WHERE id IN (
-                SELECT r.id
-                FROM revlog r
-                INNER JOIN cards c ON r.cid = c.id
-                INNER JOIN notes n ON n.id = c.nid
-                WHERE n.id = ?1
-                AND r.id >= ?2
-                AND r.id < ?3
-            );
-        ";
+        UPDATE revlog
+        SET id = id - ?4
+        WHERE id IN (
+            SELECT r.id
+            FROM revlog r
+            INNER JOIN cards c ON r.cid = c.id
+            INNER JOIN notes n ON n.id = c.nid
+            WHERE n.id = ?1
+            AND r.id >= ?2
+            AND r.id < ?3
+        );
+    ";
 
         let conn = Connection::open(&self.db_path)?;
         for note_id in notes {
             if self.simulate {
-                println!("Simulating update for note {} ({} to {}).", note_id, start_time, end_time);
+                println!("Simulating update for note {} ({} to {}), moving back {} days.",
+                         note_id,
+                         start_time,
+                         end_time,
+                         (id_offset / 86_400_000).abs()
+                );
             } else {
-                conn.execute(update_query, params![note_id, start_time, end_time])?;
+                conn.execute(update_query, params![note_id, start_time, end_time, id_offset])?;
                 println!("Note date updated successfully for {}.", note_id);
             }
         }
@@ -232,6 +248,20 @@ fn get_clap_matches() -> ArgMatches {
                 .long("limit")
                 .value_name("LIMIT"),
         )
+        .arg(
+            Arg::new("from")
+                .help("Start date (format: YYYY-MM-DD or YYYYMMDD)")
+                .long("from")
+                .value_name("FROM_DATE")
+                .value_parser(|s: &str| parse_date(s)),
+        )
+        .arg(
+            Arg::new("to")
+                .help("End date (format: YYYY-MM-DD or YYYYMMDD)")
+                .long("to")
+                .value_name("TO_DATE")
+                .value_parser(|s: &str| parse_date(s)),
+        )
         .get_matches()
 }
 
@@ -246,7 +276,30 @@ fn main() -> Result<()> {
     // Allow user to optionally limit the number of cards moved to previous day
     let limit: i64 = matches.get_one::<String>("limit").unwrap_or(&"0".to_string()).parse().unwrap_or(0);
 
-    let processor = AnkiProcessor::new(deck_name, collection_name, simulate, limit);
+    // User may have specified from/to dates
+    let from_date: Option<NaiveDate> = matches.get_one("from").copied();
+    let to_date: Option<NaiveDate> = matches.get_one("to").copied();
+    // Check that either both dates are provided or neither is provided
+    match (from_date, to_date) {
+        (Some(_), None) => {
+            eprintln!("Error: If --from is specified, --to must also be specified");
+            std::process::exit(1);
+        },
+        (None, Some(_)) => {
+            eprintln!("Error: If --to is specified, --from must also be specified");
+            std::process::exit(1);
+        },
+        _ => () // Both Some or both None is fine
+    }
+
+    let processor = AnkiProcessor::new(
+        deck_name,
+        collection_name,
+        simulate,
+        limit,
+        from_date,
+        to_date
+    );
     processor.process()
 }
 
@@ -257,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_generate_rid_string() {
-        let processor = AnkiProcessor::new("test_deck", "test_collection", true, 1);
+        let processor = AnkiProcessor::new("test_deck", "test_collection", true, 1, None, None);
         let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let rid_string = processor.generate_rid_string(date, 1);
 
