@@ -29,7 +29,6 @@ pub fn parse_date(date_str: &str) -> Result<NaiveDate, String> {
 
 /// Calculates number of days between two dates, inclusive of both dates
 pub fn days_between(from: NaiveDate, to: NaiveDate) -> i64 {
-    // Add 1 since we want to include both start and end date
     (to - from).num_days()
 }
 
