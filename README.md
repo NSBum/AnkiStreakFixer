@@ -5,7 +5,7 @@
 ![Anki Streak Fixer Logo](./img/logo.png)
 
 ## Introduction
-Anki Streak Fixer is a Rust-based utility to manage and modify streak data in your Anki decks. Essentially, it moves reviews in a particular deck in a specified collection from _today_ to _yesterday_. This fixes the condition that leads to a missed streak. Yes, this is "cheating", but it causes me no moral dilemma. But if you have strong opinions about such measures, the project may not be for you.
+Anki Streak Fixer is a Rust-based utility to manage and modify streak data in your Anki decks. Essentially, it moves reviews in a particular deck in a specified collection from _today_ to _yesterday_ (or as of version 0.3.0 from any day to any other day.) This fixes the condition that leads to a missed streak. Yes, this is "cheating", but it causes me no moral dilemma. 👹 But if you have strong opinions about such measures, the project may not be for you. 😇
 
 This application is particularly useful for advanced Anki users who need to manipulate review logs programmatically.
 
