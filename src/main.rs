@@ -7,7 +7,7 @@ use clap::{Arg, ArgMatches, Command};
 use std::env;
 use unicase::UniCase;
 use std::path::PathBuf;
-use date::parse_date;
+use date::{parse_date, validate_dates};
 use utils::{log, replace_deck_delimiter, red_text, green_text};
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -488,6 +488,12 @@ fn main() -> Result<()> {
             std::process::exit(1);
         },
         _ => () // Both Some or both None is fine
+    }
+
+    let today = chrono::Local::now().date_naive(); // Use current date
+    if let Err(err) = validate_dates(from_date, to_date, today) {
+        eprintln!("\x1b[31m[ERROR]\x1b[0m {}", err); // Print the error in red
+        std::process::exit(1); // Exit with an error code
     }
 
     let processor = AnkiProcessor::new(
