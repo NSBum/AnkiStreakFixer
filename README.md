@@ -102,6 +102,8 @@ Contributions are welcome! To contribute:
 
 For major changes, please open an issue first to discuss what you would like to contribute.
 
+If you are not able to contribute code to the project that's fine; you can open an issue wherein you describe what features you would like to see, what bugs you may be encountering etc. Please be as specific as possible and include more details than you think are necessary.
+
 ## License
 This project is licensed under the MIT License. See the `LICENSE` file for details.
 
