@@ -1,14 +1,13 @@
 [package]
 name = "anki_streak_fixer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
-rusqlite = "0.32.1"
+rusqlite = { version = "0.32.1", features = ["load_extension", "collation"] }
 chrono = "0.4"
 clap = { version = "4.0", features = ["derive"] }
 shellexpand = "3.1.0"
-unicode-segmentation = "1.10.1"
-unicode-script = "0.5.5"
+unicase = "2.6.0"
 
 [dev-dependencies]

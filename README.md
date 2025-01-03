@@ -56,10 +56,21 @@ cargo run -- "<DECK_NAME>" -c "<COLLECTION_NAME>" [-s]
 ### Positional Arguments
 - `<DECK_NAME>`: The name of the Anki deck to process.
 
+Since decks may be organized hierarchically, it presents a problem when specifying which deck to manipulate. If you have decks arranged like this, for example:
+
+![Deck hierarchy](/img/deck_hierarchy.png)
+
+then you should choose one of the subdeck names.
+
 ### Options
 - `-c`, `--collection <COLLECTION>`: The name of the Anki collection.
 - `-s`, `--simulate`: Enable simulation mode to preview changes without modifying the database.
 - `l`, `--limit`: Limit the number of cards moved
+- `v`, `--verbose`: Use verbose logging
+- `f`, `--from`: Optionally specify a _from_ date. Reviews will be moved from this date.
+- `t`, `--to`: Optionally specify a _to_ date. Reviews will be moved to this date.
+
+The date formats can be e.g. _20250103_ or _2025-01-03_. For the `--from` date, it can also be _today_.
 
 ### Example
 Simulate changes for the deck "Словарный запас" in the collection "Alan - Russian":
