@@ -1,7 +1,7 @@
 
 pub fn log(verbose: bool, message: &str) {
     if verbose {
-        println!("[VERBOSE] {}", message);
+        println!("{}", message);
     }
 }
 

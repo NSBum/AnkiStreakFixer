@@ -107,9 +107,14 @@ fn open_database_with_collation(db_path: &str) -> Result<Connection> {
     Ok(conn)
 }
 
+enum AppMode {
+    Deck(String), // Contains the deck name
+    All,          // All decks
+}
 
 struct AppConfig {
     verbose: bool,
+    mode: AppMode
 }
 
 #[derive(Debug)]
@@ -138,7 +143,6 @@ impl AnkiCollection {
 }
 
 struct AnkiProcessor<'a> {
-    deck_name: String,
     simulate: bool,
     db_path: PathBuf,
     limit: i64,
@@ -149,7 +153,6 @@ struct AnkiProcessor<'a> {
 
 impl<'a> AnkiProcessor<'a> {
     fn new(
-        deck_name: &str,
         collection_name: &str,
         simulate: bool,
         limit: i64,
@@ -159,7 +162,7 @@ impl<'a> AnkiProcessor<'a> {
     ) -> Self {
         let collection = AnkiCollection::new(collection_name);
         Self {
-            deck_name: deck_name.to_string(),
+            //deck_name: deck_name.to_string(),
             simulate,
             db_path: collection.collection_path(),
             limit,
@@ -191,7 +194,15 @@ impl<'a> AnkiProcessor<'a> {
         let note_ids = self.fetch_reviewed_notes()?;
 
         if note_ids.is_empty() {
-            println!("No notes found for today in deck '{}'.", self.deck_name);
+            let msg = match &self.config.mode {
+                AppMode::All => format!("No notes found in any deck for {}", base_date),
+                AppMode::Deck(deck_name) => format!(
+                    "No notes found in the deck '{}' for {}",
+                    deck_name, base_date
+                ),
+            };
+
+            println!("{}", msg);
         } else {
             self.process_notes(note_ids, &rid_string)?;
         }
@@ -249,9 +260,17 @@ impl<'a> AnkiProcessor<'a> {
 
     /// Fetches matching deck names where the name contains the provided deck name.
     fn fetch_matching_decks(&self) -> Result<Vec<String>> {
+        // Ensure this is only called in AppMode::Deck
+        let deck_name = match &self.config.mode {
+            AppMode::Deck(name) => name,
+            AppMode::All => {
+                return Err(rusqlite::Error::InvalidQuery); // Protect against misuse
+            }
+        };
+
         log(
             self.config.verbose,
-            &format!("Fetching matching deck names for {}", self.deck_name),
+            &format!("Fetching matching deck names for {}", deck_name),
         );
 
         // SQL query with the `COLLATE unicase` collation
@@ -261,15 +280,16 @@ impl<'a> AnkiProcessor<'a> {
             WHERE name COLLATE unicase LIKE '%' || ?1 || '%'
             ORDER BY name COLLATE unicase;
         ";
+
         // Open the database and register the `unicase` collation
         let conn = open_database_with_collation(self.db_path.to_str().unwrap())?;
-
         let mut stmt = conn.prepare(query)?;
 
         let matching_decks = stmt
-            .query_map(params![self.deck_name], |row| row.get(0))?
+            .query_map(params![deck_name], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()?;
 
+        // Log based on the number of matching decks
         log(
             self.config.verbose,
             &match matching_decks.len() {
@@ -283,50 +303,76 @@ impl<'a> AnkiProcessor<'a> {
     }
 
 
+
     fn fetch_reviewed_notes(&self) -> Result<Vec<i64>> {
         log(self.config.verbose, "Fetching reviewed notes...");
 
-        let matching_decks = self.fetch_matching_decks()?;
-
-        if matching_decks.is_empty() {
-            return Err(rusqlite::Error::InvalidQuery); // No matches found
-        }
-
-        let deck_name_to_use = if matching_decks.len() == 1 {
-            // Single match: Use it directly
-            matching_decks[0].clone()
-        } else {
-            // Multiple matches: Print options and exit
-            println!(
-                "{} Multiple decks match '{}'. Please refine your input.",
-                red_text("[ERROR]"),
-                self.deck_name
-            );
-            println!("Matching decks:");
-            for deck in &matching_decks {
-                println!("- {}", replace_deck_delimiter(deck));
-            }
-            return Err(rusqlite::Error::InvalidQuery); // Exit with an error
-        };
-        log(self.config.verbose, &format!("Found matching deck name: {}", deck_name_to_use));
-        let query = "
-            SELECT DISTINCT notes.id
-            FROM cards
-            JOIN notes ON cards.nid = notes.id
-            JOIN decks ON cards.did = decks.id
-            JOIN revlog ON cards.id = revlog.cid
-            WHERE decks.name COLLATE unicase = ?1
-            AND date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-            ORDER BY notes.id;
-        ";
-
-        // Open the database and register the `unicase` collation
         let conn = open_database_with_collation(self.db_path.to_str().unwrap())?;
+
+        // Query logic based on mode
+        let query = match &self.config.mode {
+            AppMode::All => {
+                log(self.config.verbose, "Mode: All decks");
+                // Return a query that doesn't limit by deck
+                "
+                SELECT DISTINCT notes.id
+                FROM cards
+                JOIN notes ON cards.nid = notes.id
+                JOIN revlog ON cards.id = revlog.cid
+                WHERE date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
+                ORDER BY notes.id;
+                "
+            }
+            AppMode::Deck(deck_name) => {
+                log(self.config.verbose, &format!("Mode: Specific deck '{}'", deck_name));
+
+                let matching_decks = self.fetch_matching_decks()?;
+                if matching_decks.is_empty() {
+                    return Err(rusqlite::Error::InvalidQuery); // No matches found
+                }
+
+                if matching_decks.len() > 1 {
+                    println!(
+                        "{} Multiple decks match '{}'. Please refine your input.",
+                        red_text("[ERROR]"),
+                        deck_name
+                    );
+                    println!("Matching decks:");
+                    for deck in &matching_decks {
+                        println!("- {}", replace_deck_delimiter(deck));
+                    }
+                    return Err(rusqlite::Error::InvalidQuery); // Exit with an error
+                }
+
+                log(
+                    self.config.verbose,
+                    &format!("Found matching deck name: {}", matching_decks[0]),
+                );
+                // Return query that is limited by deck name
+                "
+                SELECT DISTINCT notes.id
+                FROM cards
+                JOIN notes ON cards.nid = notes.id
+                JOIN decks ON cards.did = decks.id
+                JOIN revlog ON cards.id = revlog.cid
+                WHERE decks.name COLLATE unicase = ?1
+                AND date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
+                ORDER BY notes.id;
+                "
+            }
+        };
+
+        // Prepare and execute the query
         let mut stmt = conn.prepare(query)?;
 
-        let notes = stmt
-            .query_map(params![deck_name_to_use], |row| row.get(0))?
-            .collect::<Result<Vec<i64>, _>>()?;
+        let notes = match &self.config.mode {
+            AppMode::All => stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?,
+            AppMode::Deck(deck_name) => stmt
+                .query_map(params![deck_name], |row| row.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?,
+        };
 
         // Apply limit if specified
         let limited_notes = if self.limit > 0 {
@@ -337,6 +383,7 @@ impl<'a> AnkiProcessor<'a> {
 
         Ok(limited_notes)
     }
+
 
 
     fn process_notes(&self, notes: Vec<i64>, rid_string: &str) -> Result<()> {
@@ -408,7 +455,7 @@ fn get_clap_matches() -> ArgMatches {
         .arg(
             Arg::new("deck_name")
                 .help("Name of the deck to process.")
-                .required(true)
+                //.required(true)
                 .index(1),
         )
         .arg(
@@ -459,15 +506,23 @@ fn get_clap_matches() -> ArgMatches {
 fn main() -> Result<()> {
     let matches = get_clap_matches();
 
-    let deck_name = matches.get_one::<String>("deck_name").unwrap().as_str();
+    // Optional deck name
+    let deck_name = matches.get_one::<String>("deck_name").map(|s| s.as_str());
+    // Required collection name
     let collection_name = matches.get_one::<String>("collection").unwrap().as_str();
 
     let simulate = matches.get_flag("simulate");
 
     let verbose = matches.get_flag("verbose");
 
+    // Set mode based on deck name presence
+    let mode = match deck_name {
+        Some(name) => AppMode::Deck(name.to_string()),
+        None => AppMode::All,
+    };
+
     // Create global config
-    let config = AppConfig { verbose };
+    let config = AppConfig { verbose, mode };
 
     log(config.verbose, "Application started.");
 
@@ -497,7 +552,6 @@ fn main() -> Result<()> {
     }
 
     let processor = AnkiProcessor::new(
-        deck_name,
         collection_name,
         simulate,
         limit,
@@ -515,8 +569,8 @@ mod tests {
 
     #[test]
     fn test_generate_rid_string() {
-        let config = AppConfig{verbose:true};
-        let processor = AnkiProcessor::new("test_deck", "test_collection", true, 1, None, None, &config);
+        let config = AppConfig{verbose:true, mode:AppMode::All};
+        let processor = AnkiProcessor::new("test_collection", true, 1, None, None, &config);
         let date = NaiveDate::from_ymd_opt(2025, 1, 1).unwrap();
         let rid_string = processor.generate_rid_string(date, 1);
 
