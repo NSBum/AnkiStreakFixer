@@ -62,6 +62,8 @@ Since decks may be organized hierarchically, it presents a problem when specifyi
 
 then you should choose one of the subdeck names.
 
+If the deck is not specified, then AnkiStreakFixer will attempt to move reviews from _all_ decks in the collection. This is useful if you like to keep track of your streaks in particular decks and subdecks.
+
 ### Options
 - `-c`, `--collection <COLLECTION>`: The name of the Anki collection.
 - `-s`, `--simulate`: Enable simulation mode to preview changes without modifying the database.
