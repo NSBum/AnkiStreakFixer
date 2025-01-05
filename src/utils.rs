@@ -9,13 +9,13 @@ pub fn replace_deck_delimiter(deck_name: &str) -> String {
     deck_name.replace('\u{001F}', "::")
 }
 
-pub fn red_text(text: &str) -> String {
-    format!("\x1b[31m{}\x1b[0m", text)
-}
+// pub fn red_text(text: &str) -> String {
+//     format!("\x1b[31m{}\x1b[0m", text)
+// }
 
-pub fn green_text(text: &str) -> String {
-    format!("\x1b[32m{}\x1b[0m", text)
-}
+// pub fn green_text(text: &str) -> String {
+//     format!("\x1b[32m{}\x1b[0m", text)
+// }
 
 #[cfg(test)]
 mod tests {

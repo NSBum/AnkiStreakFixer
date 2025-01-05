@@ -8,7 +8,7 @@ use std::env;
 use unicase::UniCase;
 use std::path::PathBuf;
 use date::{parse_date, validate_dates};
-use utils::{log, replace_deck_delimiter, red_text, green_text};
+use utils::{log, replace_deck_delimiter};
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -259,6 +259,7 @@ impl<'a> AnkiProcessor<'a> {
     }
 
     /// Fetches matching deck names where the name contains the provided deck name.
+    /// Ensures that the parent deck is processed if it matches or has children.
     fn fetch_matching_decks(&self) -> Result<Vec<String>> {
         // Ensure this is only called in AppMode::Deck
         let deck_name = match &self.config.mode {
@@ -270,44 +271,81 @@ impl<'a> AnkiProcessor<'a> {
 
         log(
             self.config.verbose,
-            &format!("Fetching matching deck names for {}", deck_name),
+            &format!("Fetching matching deck names for '{}'", deck_name),
         );
 
-        // SQL query with the `COLLATE unicase` collation
+        // SQL query to fetch decks that match or are children of the provided name
         let query = "
-            SELECT name
-            FROM decks
-            WHERE name COLLATE unicase LIKE '%' || ?1 || '%'
-            ORDER BY name COLLATE unicase;
-        ";
+        SELECT name
+        FROM decks
+        WHERE name COLLATE unicase = ?1
+        OR name COLLATE unicase LIKE ?2 || '::%'
+        ORDER BY name COLLATE unicase;
+    ";
 
         // Open the database and register the `unicase` collation
         let conn = open_database_with_collation(self.db_path.to_str().unwrap())?;
         let mut stmt = conn.prepare(query)?;
 
         let matching_decks = stmt
-            .query_map(params![deck_name], |row| row.get(0))?
+            .query_map(
+                params![deck_name, deck_name],
+                |row| row.get::<_, String>(0),
+            )?
             .collect::<Result<Vec<String>, _>>()?;
 
-        // Log based on the number of matching decks
+        if matching_decks.is_empty() {
+            log(
+                self.config.verbose,
+                &format!("No decks found matching or under '{}'", deck_name),
+            );
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+
         log(
             self.config.verbose,
             &match matching_decks.len() {
-                0 => "Found no matching decks.".to_string(),
-                1 => "Found 1 matching deck.".to_string(),
-                n => format!("Found {} matching decks.", n),
+                1 => format!("Single matching deck found: '{}'", matching_decks[0]),
+                _ => format!(
+                    "Parent deck '{}' contains the following child decks:\n{}",
+                    deck_name,
+                    matching_decks
+                        .iter()
+                        .map(|d| replace_deck_delimiter(d))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
             },
         );
 
         Ok(matching_decks)
     }
 
-
-
     fn fetch_reviewed_notes(&self) -> Result<Vec<i64>> {
         log(self.config.verbose, "Fetching reviewed notes...");
 
         let conn = open_database_with_collation(self.db_path.to_str().unwrap())?;
+
+        // Ensure we have a valid `from_date` to work with
+        let from_date = match self.from_date {
+            Some(date) => date,
+            None => {
+                return Err(rusqlite::Error::InvalidQuery); // `--from` date is required
+            }
+        };
+
+        log(
+            self.config.verbose,
+            &format!("Fetching notes reviewed on: {}", from_date),
+        );
+
+        // Convert `from_date` to a timestamp range
+        let from_timestamp_start = from_date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let from_timestamp_end = from_timestamp_start + 86_400; // Add 24 hours to get the next day
 
         // Query logic based on mode
         let query = match &self.config.mode {
@@ -315,50 +353,49 @@ impl<'a> AnkiProcessor<'a> {
                 log(self.config.verbose, "Mode: All decks");
                 // Return a query that doesn't limit by deck
                 "
-                SELECT DISTINCT notes.id
-                FROM cards
-                JOIN notes ON cards.nid = notes.id
-                JOIN revlog ON cards.id = revlog.cid
-                WHERE date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-                ORDER BY notes.id;
-                "
+            SELECT DISTINCT notes.id
+            FROM cards
+            JOIN notes ON cards.nid = notes.id
+            JOIN revlog ON cards.id = revlog.cid
+            WHERE revlog.id / 1000 BETWEEN ?1 AND ?2
+            ORDER BY notes.id;
+            "
             }
-            AppMode::Deck(deck_name) => {
-                log(self.config.verbose, &format!("Mode: Specific deck '{}'", deck_name));
-
+            AppMode::Deck(_) => {
+                // Fetch the parent deck and its hierarchy
                 let matching_decks = self.fetch_matching_decks()?;
-                if matching_decks.is_empty() {
-                    return Err(rusqlite::Error::InvalidQuery); // No matches found
-                }
-
-                if matching_decks.len() > 1 {
-                    println!(
-                        "{} Multiple decks match '{}'. Please refine your input.",
-                        red_text("[ERROR]"),
-                        deck_name
-                    );
-                    println!("Matching decks:");
-                    for deck in &matching_decks {
-                        println!("- {}", replace_deck_delimiter(deck));
-                    }
-                    return Err(rusqlite::Error::InvalidQuery); // Exit with an error
-                }
+                let parent_deck = &matching_decks[0]; // Assume first is parent
 
                 log(
                     self.config.verbose,
-                    &format!("Found matching deck name: {}", matching_decks[0]),
+                    &format!(
+                        "Processing parent deck '{}'{}",
+                        parent_deck,
+                        if matching_decks.len() > 1 {
+                            format!(
+                                " with children:\n{}",
+                                matching_decks[1..]
+                                    .iter()
+                                    .map(|d| replace_deck_delimiter(d))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            )
+                        } else {
+                            "".to_string()
+                        }
+                    ),
                 );
-                // Return query that is limited by deck name
+
                 "
-                SELECT DISTINCT notes.id
-                FROM cards
-                JOIN notes ON cards.nid = notes.id
-                JOIN decks ON cards.did = decks.id
-                JOIN revlog ON cards.id = revlog.cid
-                WHERE decks.name COLLATE unicase = ?1
-                AND date(revlog.id / 1000, 'unixepoch', 'localtime') = date('now', 'localtime')
-                ORDER BY notes.id;
-                "
+            SELECT DISTINCT notes.id
+            FROM cards
+            JOIN notes ON cards.nid = notes.id
+            JOIN decks ON cards.did = decks.id
+            JOIN revlog ON cards.id = revlog.cid
+            WHERE decks.name COLLATE unicase = ?3
+            AND revlog.id / 1000 BETWEEN ?1 AND ?2
+            ORDER BY notes.id;
+            "
             }
         };
 
@@ -367,11 +404,17 @@ impl<'a> AnkiProcessor<'a> {
 
         let notes = match &self.config.mode {
             AppMode::All => stmt
-                .query_map([], |row| row.get(0))?
+                .query_map(params![from_timestamp_start, from_timestamp_end], |row| row.get(0))?
                 .collect::<Result<Vec<i64>, _>>()?,
-            AppMode::Deck(deck_name) => stmt
-                .query_map(params![deck_name], |row| row.get(0))?
-                .collect::<Result<Vec<i64>, _>>()?,
+            AppMode::Deck(_) => {
+                let matching_decks = self.fetch_matching_decks()?;
+                let parent_deck = &matching_decks[0]; // Use parent deck
+                stmt.query_map(
+                    params![from_timestamp_start, from_timestamp_end, parent_deck],
+                    |row| row.get(0),
+                )?
+                    .collect::<Result<Vec<i64>, _>>()?
+            }
         };
 
         // Apply limit if specified
@@ -384,8 +427,6 @@ impl<'a> AnkiProcessor<'a> {
         Ok(limited_notes)
     }
 
-
-
     fn process_notes(&self, notes: Vec<i64>, rid_string: &str) -> Result<()> {
         log(
             self.config.verbose,
@@ -395,53 +436,75 @@ impl<'a> AnkiProcessor<'a> {
         let start_time: i64 = rid_string.split(':').nth(1).unwrap().parse().unwrap();
         let end_time: i64 = rid_string.split(':').nth(2).unwrap().parse().unwrap();
 
-        // Calculate the offset assuming from_date is always after to_date
+        // Calculate the actual ID offset using your utility functions
         let id_offset = if let (Some(from), Some(to)) = (self.from_date, self.to_date) {
-            let days = date::days_between(to, from); // Calculate the number of days backward
-            date::calculate_id_offset(days)
+            let days_difference = date::days_between(to, from);
+            date::calculate_id_offset(days_difference)
         } else {
-            86_400_000 // default one day offset
+            date::calculate_id_offset(1) // Default 1-day offset if dates are not provided
         };
 
-        let update_query = "
+        let conn = Connection::open(&self.db_path)?;
+
+        // Prepare queries
+        let update_revlog_query = "
         UPDATE revlog
-        SET id = id - ?4
+        SET id = id - ?
         WHERE id IN (
             SELECT r.id
             FROM revlog r
             INNER JOIN cards c ON r.cid = c.id
             INNER JOIN notes n ON n.id = c.nid
-            WHERE n.id = ?1
-            AND r.id >= ?2
-            AND r.id < ?3
-        );
+            WHERE n.id = ?
+            AND r.id >= ?
+            AND r.id < ?
+        )
+        RETURNING cid;
     ";
 
-        let conn = Connection::open(&self.db_path)?;
-        for note_id in notes {
+        let update_cards_query = "
+        UPDATE cards
+        SET mod = ?, usn = -1
+        WHERE id = ?;
+    ";
+
+        let mut affected_cards = Vec::new();
+        let current_time = chrono::Utc::now().timestamp();
+
+        for note_id in &notes {
+            let mut stmt = conn.prepare(update_revlog_query)?;
+
+            // Collect affected card IDs for the current note
+            let note_cards = stmt
+                .query_map(params![id_offset, note_id, start_time, end_time], |row| {
+                    row.get::<_, i64>(0) // Extract the card ID
+                })?
+                .collect::<Result<Vec<i64>, _>>()?;
+
+            // Clone note_cards before extending
+            affected_cards.extend(note_cards.clone());
+
             if self.simulate {
                 println!(
-                    "[VERBOSE] - {} for note {}",
-                    green_text("Simulating update"),
-                    note_id
-                );
-                println!("\tid {} → {}",
-                    start_time,
-                    start_time - id_offset
-                );
-                println!("\tmoving back {} days",
-                    id_offset / 86_400_000
-                );
-            } else {
-                conn.execute(update_query, params![note_id, start_time, end_time, id_offset])?;
-                println!(
-                    "Note {} updated successfully (current ID: {} to new ID: {}).",
+                    "Simulating update for note {} (from {} to {}), moving back {} days.",
                     note_id,
                     start_time,
-                    start_time - id_offset
+                    end_time,
+                    id_offset / 86_400_000 // Convert offset back to days for display
                 );
+            } else {
+                // Update the cards table for affected cards
+                for cid in &note_cards {
+                    conn.execute(update_cards_query, params![current_time, cid])?;
+                }
+                println!("Note date updated successfully for {}.", note_id);
             }
         }
+
+        log(
+            self.config.verbose,
+            &format!("Marked {} cards as needing sync.", affected_cards.len()),
+        );
 
         Ok(())
     }
