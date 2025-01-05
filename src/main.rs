@@ -463,10 +463,10 @@ impl<'a> AnkiProcessor<'a> {
     ";
 
         let update_cards_query = "
-        UPDATE cards
-        SET mod = ?, usn = -1
-        WHERE id = ?;
-    ";
+            UPDATE cards
+            SET mod = ?, usn = -1
+            WHERE id = ?;
+        ";
 
         let mut affected_cards = Vec::new();
         let current_time = chrono::Utc::now().timestamp();
@@ -498,6 +498,12 @@ impl<'a> AnkiProcessor<'a> {
                     conn.execute(update_cards_query, params![current_time, cid])?;
                 }
                 println!("Note date updated successfully for {}.", note_id);
+
+                log(self.config.verbose, "Will trigger full database sync criterion.");
+                let force_sync_query = "
+                    UPDATE col SET scm = scm + 1;
+                ";
+                conn.execute(force_sync_query, [])?;
             }
         }
 
